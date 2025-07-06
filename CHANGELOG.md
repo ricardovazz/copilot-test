@@ -5,6 +5,19 @@ All notable changes to the GitHub Copilot shared configuration will be documente
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2025-07-06
+
+### Changed
+- Merge pull request #5 from ricardovazz/create-pull-request/patch
+
+🔧 Manual Sync: GitHub Copilot Config v1.0.5
+
+**Details:**
+- Updated from v1.0.5 to v1.0.6
+- Commit: [`488e03b`](https://github.com/ricardovazz/copilot-test/commit/488e03bff3c10f164f0005f6fda99ffb0b9beff4)
+- Author: Ricardo Vaz
+
+
 ## [1.0.5] - 2025-07-06
 
 ### Changed

@@ -141,7 +141,16 @@ jobs:
 
       - name: Create Git Tag
         run: |
-          git tag "v${{ steps.bump.outputs.new_version }}" -m "Release v${{ steps.bump.outputs.new_version }}
+          # Ensure git is configured
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Check if the tag already exists
+          if git rev-parse "v${{ steps.bump.outputs.new_version }}" >/dev/null 2>&1; then
+            echo "Tag v${{ steps.bump.outputs.new_version }} already exists. Skipping tag creation."
+          else
+           # Create a new tag for the version bump
+           git tag "v${{ steps.bump.outputs.new_version }}" -m "Release v${{ steps.bump.outputs.new_version }}
 
           Changes from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
           

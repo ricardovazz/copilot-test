@@ -1,6 +1,6 @@
 {
-  "version": "1.0.3",
-  "updated": "2025-07-06T15:03:30Z",
+  "version": "1.0.4",
+  "updated": "2025-07-06T15:10:39Z",
   "description": "GitHub Copilot shared configuration version",
   "last_pr": {
     "number": 0,
@@ -8,7 +8,7 @@
   },
   "changelog_url": "https://github.com/your-org/copilot-shared-config/blob/main/CHANGELOG.md",
   "last_commit": {
-    "sha": "ea8fbeeb0e18a23928bf17f9389deec1cf9bce53",
-    "message": "add issues permission"
+    "sha": "856ed8a32ef420cfc91e0d7f5a54cba731dba6de",
+    "message": "Merge branch 'main' of https://github.com/ricardovazz/copilot-test into main"
   }
 }

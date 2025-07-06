@@ -1,0 +1,244 @@
+name: Manual Sync Copilot Configuration
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Specific version to sync (leave empty for latest)'
+        required: false
+        default: ''
+        type: string
+      force_update:
+        description: 'Force update even if versions match'
+        required: false
+        default: false
+        type: boolean
+      branch_name:
+        description: 'Custom branch name for the PR'
+        required: false
+        default: 'manual-sync-copilot-config'
+        type: string
+      skip_pr:
+        description: 'Skip PR creation and commit directly to main'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CENTRAL_REPO: "ricardovazz/copilot-test"
+  SERVICE_NAME: "user-service"  # Change this for each microservice
+
+jobs:
+  manual-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display Input Parameters
+        run: |
+          echo "🔧 Manual Sync Parameters:"
+          echo "Version: ${{ github.event.inputs.version || 'latest' }}"
+          echo "Force Update: ${{ github.event.inputs.force_update }}"
+          echo "Branch Name: ${{ github.event.inputs.branch_name }}"
+          echo "Skip PR: ${{ github.event.inputs.skip_pr }}"
+          echo "Service: ${{ env.SERVICE_NAME }}"
+
+      - name: Checkout Current Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout Central Config Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CENTRAL_REPO }}
+          path: central-config
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || 'main' }}
+
+      - name: Get Version Information
+        id: version-info
+        run: |
+          # Get target version from central repo
+          if [ -f "central-config/version.json" ]; then
+            TARGET_VERSION=$(cat central-config/version.json | jq -r '.version')
+          else
+            TARGET_VERSION="unknown"
+          fi
+          
+          # Get current version from this repo
+          CURRENT_VERSION="0.0.0"
+          if [ -f ".github/copilot-config-version.txt" ]; then
+            CURRENT_VERSION=$(cat .github/copilot-config-version.txt)
+          fi
+          
+          echo "Current version: $CURRENT_VERSION"
+          echo "Target version: $TARGET_VERSION"
+          
+          # Determine if update is needed
+          NEEDS_UPDATE="false"
+          if [ "${{ github.event.inputs.force_update }}" = "true" ]; then
+            NEEDS_UPDATE="true"
+            echo "Force update enabled - will update regardless of version"
+          elif [ "$CURRENT_VERSION" != "$TARGET_VERSION" ]; then
+            NEEDS_UPDATE="true"
+            echo "Version mismatch detected - update needed"
+          else
+            echo "Versions match - no update needed (use force_update to override)"
+          fi
+          
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "target_version=$TARGET_VERSION" >> $GITHUB_OUTPUT
+          echo "needs_update=$NEEDS_UPDATE" >> $GITHUB_OUTPUT
+
+      - name: Validate Central Repository
+        if: steps.version-info.outputs.needs_update == 'true'
+        run: |
+          echo "Validating central repository structure..."
+          
+          # Check required directories and files exist in .github folder
+          required_paths=(
+            "central-config/.github/copilot-instructions.md"
+            "central-config/.github/git-commit-instructions.md"
+            "central-config/.github/prompts"
+          )
+          
+          for path in "${required_paths[@]}"; do
+            if [ ! -e "$path" ]; then
+              echo "❌ Error: Required path '$path' not found in central repository"
+              exit 1
+            fi
+          done
+          
+          echo "✅ Central repository structure validation passed"
+
+      - name: Sync Configuration Files
+        if: steps.version-info.outputs.needs_update == 'true'
+        run: |
+          echo "🔄 Syncing configuration files..."
+          
+          # Create necessary directories
+          mkdir -p .github/prompts
+          
+          # Backup existing files (for rollback if needed)
+          if [ -f ".github/copilot-instructions.md" ]; then
+            cp .github/copilot-instructions.md .github/copilot-instructions.md.backup
+          fi
+          
+          # Copy files from central repo .github folder
+          echo "Copying GitHub Copilot configuration files..."
+          cp central-config/.github/copilot-instructions.md .github/
+          cp central-config/.github/git-commit-instructions.md .github/
+          
+          # Copy prompt files
+          echo "Copying prompt templates..."
+          if [ -d "central-config/.github/prompts" ]; then
+            cp central-config/.github/prompts/*.prompt.md .github/prompts/ 2>/dev/null || echo "No prompt files found to copy"
+          fi
+          
+          # Update version tracking
+          echo "${{ steps.version-info.outputs.target_version }}" > .github/copilot-config-version.txt
+          
+          # Clean up
+          rm -rf central-config
+          
+          echo "✅ Configuration sync completed"
+
+      - name: Validate Synced Files
+        if: steps.version-info.outputs.needs_update == 'true'
+        run: |
+          echo "🔍 Validating synced files..."
+          
+          # Check that critical files exist and are not empty
+          critical_files=(
+            ".github/copilot-instructions.md"
+            ".github/git-commit-instructions.md"
+            ".github/copilot-config-version.txt"
+          )
+          
+          for file in "${critical_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "❌ Error: Critical file '$file' is missing after sync"
+              exit 1
+            fi
+            
+            if [ ! -s "$file" ]; then
+              echo "❌ Error: Critical file '$file' is empty after sync"
+              exit 1
+            fi
+          done
+          
+          # Check that at least some prompt files exist
+          prompt_count=$(ls -1 .github/prompts/*.prompt.md 2>/dev/null | wc -l)
+          if [ "$prompt_count" -eq 0 ]; then
+            echo "⚠️ Warning: No prompt files found after sync"
+          else
+            echo "✅ Found $prompt_count prompt files"
+          fi
+          
+          echo "✅ File validation completed"
+
+      - name: Generate Change Summary
+        if: steps.version-info.outputs.needs_update == 'true'
+        id: changes
+        run: |
+          echo "📊 Generating change summary..."
+          
+          # Get list of changed files
+          changed_files=$(find .github -name "*.md" -o -name "copilot-config-version.txt" | sort)
+          prompt_files=$(find .github/prompts -name "*.prompt.md" 2>/dev/null | sort)
+          
+          # Count files
+          config_count=$(echo "$changed_files" | wc -l)
+          prompt_count=$(echo "$prompt_files" | wc -l)
+          
+          echo "changes_summary=Config files: $config_count, Prompt files: $prompt_count" >> $GITHUB_OUTPUT
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$changed_files" >> $GITHUB_OUTPUT
+          if [ -n "$prompt_files" ]; then
+            echo "$prompt_files" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Commit Directly to Main
+        if: steps.version-info.outputs.needs_update == 'true' && github.event.inputs.skip_pr == 'true'
+        run: |
+          echo "📝 Committing directly to main branch..."
+          
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add .github/
+          git commit -m "chore(copilot): manual sync to v${{ steps.version-info.outputs.target_version }}
+
+          - Manually triggered sync from central repository
+          - Updated from v${{ steps.version-info.outputs.current_version }} to v${{ steps.version-info.outputs.target_version }}
+          - Force update: ${{ github.event.inputs.force_update }}
+          - ${{ steps.changes.outputs.changes_summary }}
+          
+          Triggered by: @${{ github.actor }}"
+          
+          git push origin main
+          
+          echo "✅ Changes committed directly to main branch"
+
+      - name: Create Pull Request
+        if: steps.version-info.outputs.needs_update == 'true' && github.event.inputs.skip_pr == 'false'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            chore(copilot): manual sync to v${{ steps.version-info.outputs.target_version }}
+            
+            - Manually triggered sync from central repository
+            - Updated from v${{ steps.version-info.outputs.current_version }} to v${{ steps.version-info.outputs.target_version }}
+            - Force update: ${{ github.event.inputs.force_update }}
+            - ${{ steps.changes.outputs.changes_summary }}
+          title: "🔧 Manual Sync: GitHub Copilot Config v${{ steps.version-info.outputs.target_version }}"
+          body: |
+            ## 🔧 Manual GitHub Copilot Configuration Sync
+            
+            This PR was **manually triggered** to sync GitHub Copilot configuration from the central repository.
+            
+            ### 📊 Sync Details
+            - **Triggered by**: @${{ github.actor }}
+            - 

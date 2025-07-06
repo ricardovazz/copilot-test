@@ -1,10 +1,14 @@
 {
-  "version": "1.0.0",
-  "updated": "2025-01-15T10:30:00Z",
+  "version": "1.0.1",
+  "updated": "2025-07-06T14:58:29Z",
   "description": "GitHub Copilot shared configuration version",
   "last_pr": {
     "number": 0,
     "title": "Initial version"
   },
-  "changelog_url": "https://github.com/your-org/copilot-shared-config/blob/main/CHANGELOG.md"
+  "changelog_url": "https://github.com/your-org/copilot-shared-config/blob/main/CHANGELOG.md",
+  "last_commit": {
+    "sha": "c58d10bfe13d70920aad4a35208a6eb1aeeab03f",
+    "message": "new workflow"
+  }
 }

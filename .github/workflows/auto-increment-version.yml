@@ -1,4 +1,4 @@
-name: Auto Increment Version Without PAT
+name: Auto Increment Version and Release Workflow
 
 on:
   push:
@@ -247,7 +247,6 @@ jobs:
             ### 🔄 How to Update Your Microservices
             Since this workflow doesn't automatically notify microservices, you'll need to manually trigger updates:
             
-            1. **Automatic (scheduled)**: Microservices will pick up this version in their next scheduled sync (every 4 hours)
             2. **Manual**: Go to each microservice repository and trigger the "Sync Copilot Configuration" workflow manually
             3. **API trigger**: Use the GitHub API to trigger repository dispatch events
             
@@ -297,8 +296,6 @@ jobs:
             
             ### 🔧 Update Methods
             
-            **Option 1: Wait for automatic sync** (every 4 hours)
-            - Microservices will automatically detect and sync the new version
             
             **Option 2: Manual trigger**
             - Go to each microservice repository

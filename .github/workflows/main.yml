@@ -1,0 +1,195 @@
+name: Auto Increment Version after PR Merge to Main
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [ main ]
+  workflow_dispatch:
+
+
+permissions:
+  contents: write    # Allow pushing to repository
+  actions: write     # Allow triggering workflows
+
+
+jobs:
+  increment-version:
+    # Only run if PR was actually merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+      old_version: ${{ steps.bump.outputs.old_version }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # Use PAT to bypass branch protection and trigger subsequent workflows
+          token: ${{ secrets.GITHUB_TOKEN }}  # Use default token
+
+      - name: Determine Version Bump Type
+        id: bump-type
+        run: |
+          # Get PR labels to determine bump type
+          PR_LABELS='${{ toJson(github.event.pull_request.labels) }}'
+          
+          # Default to patch version
+          BUMP_TYPE="patch"
+          
+          # Check labels for version bump type
+          if echo "$PR_LABELS" | jq -r '.[].name' | grep -q "major"; then
+            BUMP_TYPE="major"
+          elif echo "$PR_LABELS" | jq -r '.[].name' | grep -q "minor"; then
+            BUMP_TYPE="minor"
+          elif echo "$PR_LABELS" | jq -r '.[].name' | grep -q "breaking"; then
+            BUMP_TYPE="major"
+          elif echo "$PR_LABELS" | jq -r '.[].name' | grep -q "feature"; then
+            BUMP_TYPE="minor"
+          fi
+          
+          echo "Determined bump type: $BUMP_TYPE"
+          echo "::set-output name=bump_type::$BUMP_TYPE"
+
+      - name: Bump Version
+        id: bump
+        run: |
+          # Read current version
+          CURRENT_VERSION=$(cat version.json | jq -r '.version')
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          # Increment based on bump type
+          case "${{ steps.bump-type.outputs.bump_type }}" in
+            "major")
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            "minor")
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            "patch")
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "New version: $NEW_VERSION"
+          
+          # Update version.json
+          jq --arg version "$NEW_VERSION" \
+             --arg updated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+             --arg pr_number "${{ github.event.pull_request.number }}" \
+             --arg pr_title "${{ github.event.pull_request.title }}" \
+             '.version = $version | .updated = $updated | .last_pr = {number: ($pr_number | tonumber), title: $pr_title}' \
+             version.json > tmp.json && mv tmp.json version.json
+          
+          # Set outputs
+          echo "::set-output name=old_version::$CURRENT_VERSION"
+          echo "::set-output name=new_version::$NEW_VERSION"
+
+      - name: Update CHANGELOG
+        run: |
+          # Create or update CHANGELOG.md
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+          fi
+          
+          # Prepare changelog entry
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          TODAY=$(date +"%Y-%m-%d")
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          
+          # Create temporary file with new entry
+          cat > changelog_entry.md << EOF
+          
+          ## [$NEW_VERSION] - $TODAY
+          
+          ### Changed
+          - $PR_TITLE (#$PR_NUMBER by @$PR_AUTHOR)
+          
+          EOF
+          
+          # Insert new entry after the first line (# Changelog)
+          head -n 1 CHANGELOG.md > new_changelog.md
+          cat changelog_entry.md >> new_changelog.md
+          tail -n +2 CHANGELOG.md >> new_changelog.md
+          mv new_changelog.md CHANGELOG.md
+          rm changelog_entry.md
+
+      - name: Commit Version Changes
+        if: steps.bump.outputs.version_changed == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: |
+            chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]
+            
+            - Updated from ${{ steps.bump.outputs.old_version }} to ${{ steps.bump.outputs.new_version }}
+            - Bump type: ${{ steps.bump-type.outputs.bump_type }}
+            - Trigger: ${{ github.event_name }}
+          file_pattern: 'version.json CHANGELOG.md'
+          commit_user_name: 'github-actions[bot]'
+          commit_user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+
+
+      - name: Create Git Tag
+        run: |
+          git tag "v${{ steps.bump.outputs.new_version }}" -m "Release v${{ steps.bump.outputs.new_version }}
+
+          Changes from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+          
+          Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md"
+
+      - name: Push Changes and Tags
+        run: |
+          git push origin main
+          git push origin "v${{ steps.bump.outputs.new_version }}"
+
+  create-release:
+    needs: increment-version
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main  # Get the updated main branch
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "v${{ needs.increment-version.outputs.new_version }}"
+          release_name: "Release v${{ needs.increment-version.outputs.new_version }}"
+          body: |
+            ## 🚀 Release v${{ needs.increment-version.outputs.new_version }}
+            
+            ### 📋 Changes
+            - ${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})
+            
+            ### 📊 Version Bump
+            - **Previous**: v${{ needs.increment-version.outputs.old_version }}
+            - **Current**: v${{ needs.increment-version.outputs.new_version }}
+            - **Type**: ${{ steps.bump-type.outputs.bump_type }}
+            
+            ### 🎯 Affected Services
+            This release will automatically update GitHub Copilot configuration in:
+            - user-service
+            - order-service  
+            - payment-service
+            
+            ### 📖 Full Changelog
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for complete details.
+            
+            ---
+            *This release was automatically created after merging PR #${{ github.event.pull_request.number }}*
+          draft: false
+          prerelease: false

@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "updated": "2025-01-15T10:30:00Z",
+  "description": "GitHub Copilot shared configuration version",
+  "last_pr": {
+    "number": 0,
+    "title": "Initial version"
+  },
+  "changelog_url": "https://github.com/your-org/copilot-shared-config/blob/main/CHANGELOG.md"
+}

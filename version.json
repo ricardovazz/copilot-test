@@ -1,6 +1,6 @@
 {
-  "version": "1.0.2",
-  "updated": "2025-07-06T15:00:06Z",
+  "version": "1.0.3",
+  "updated": "2025-07-06T15:03:30Z",
   "description": "GitHub Copilot shared configuration version",
   "last_pr": {
     "number": 0,
@@ -8,7 +8,7 @@
   },
   "changelog_url": "https://github.com/your-org/copilot-shared-config/blob/main/CHANGELOG.md",
   "last_commit": {
-    "sha": "dec7c1daf0e1ed7bf62d8d47570276d5d2103ba9",
-    "message": "Merge pull request #1 from ricardovazz/ricardovazz-patch-1\n\nUpdate copilot-instructions.md"
+    "sha": "ea8fbeeb0e18a23928bf17f9389deec1cf9bce53",
+    "message": "add issues permission"
   }
 }

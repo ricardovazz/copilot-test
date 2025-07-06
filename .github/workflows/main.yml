@@ -1,67 +1,98 @@
-name: Auto Increment Version after PR Merge to Main
+name: Auto Increment Version Without PAT
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [ main ]
+  push:
+    branches:
+      - main
   workflow_dispatch:
-
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
-  contents: write    # Allow pushing to repository
-  actions: write     # Allow triggering workflows
-
+  contents: write
+  pull-requests: write
+  actions: write
 
 jobs:
   increment-version:
-    # Only run if PR was actually merged (not just closed)
-    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
       old_version: ${{ steps.bump.outputs.old_version }}
+      version_changed: ${{ steps.bump.outputs.version_changed }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # Use PAT to bypass branch protection and trigger subsequent workflows
-          token: ${{ secrets.GITHUB_TOKEN }}  # Use default token
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
 
       - name: Determine Version Bump Type
         id: bump-type
         run: |
-          # Get PR labels to determine bump type
-          PR_LABELS='${{ toJson(github.event.pull_request.labels) }}'
-          
-          # Default to patch version
+          # Default to patch
           BUMP_TYPE="patch"
           
-          # Check labels for version bump type
-          if echo "$PR_LABELS" | jq -r '.[].name' | grep -q "major"; then
-            BUMP_TYPE="major"
-          elif echo "$PR_LABELS" | jq -r '.[].name' | grep -q "minor"; then
-            BUMP_TYPE="minor"
-          elif echo "$PR_LABELS" | jq -r '.[].name' | grep -q "breaking"; then
-            BUMP_TYPE="major"
-          elif echo "$PR_LABELS" | jq -r '.[].name' | grep -q "feature"; then
-            BUMP_TYPE="minor"
+          # If manual trigger, use input
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BUMP_TYPE="${{ github.event.inputs.bump_type }}"
+          else
+            # Analyze commit message for version hints
+            COMMIT_MSG="${{ github.event.head_commit.message }}"
+            
+            if echo "$COMMIT_MSG" | grep -iE "(breaking|major)"; then
+              BUMP_TYPE="major"
+            elif echo "$COMMIT_MSG" | grep -iE "(feature|feat|minor)"; then
+              BUMP_TYPE="minor"
+            elif echo "$COMMIT_MSG" | grep -iE "(fix|patch|bug)"; then
+              BUMP_TYPE="patch"
+            fi
           fi
           
           echo "Determined bump type: $BUMP_TYPE"
-          echo "::set-output name=bump_type::$BUMP_TYPE"
+          echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+
+      - name: Read Current Version
+        id: current-version
+        run: |
+          # Check if version.json exists, create if not
+          if [ ! -f "version.json" ]; then
+            echo '{"version": "0.0.0", "updated": "", "description": "GitHub Copilot shared configuration version"}' > version.json
+            git add version.json
+            git commit -m "chore: initialize version.json [skip ci]"
+          fi
+          
+          CURRENT_VERSION=$(cat version.json | jq -r '.version')
+          echo "Current version: $CURRENT_VERSION"
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
 
       - name: Bump Version
         id: bump
         run: |
-          # Read current version
-          CURRENT_VERSION=$(cat version.json | jq -r '.version')
-          echo "Current version: $CURRENT_VERSION"
+          CURRENT_VERSION="${{ steps.current-version.outputs.current_version }}"
+          BUMP_TYPE="${{ steps.bump-type.outputs.bump_type }}"
           
           # Parse version components
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           
+          # Remove any leading 'v' if present
+          MAJOR=${MAJOR#v}
+          
           # Increment based on bump type
-          case "${{ steps.bump-type.outputs.bump_type }}" in
+          case "$BUMP_TYPE" in
             "major")
               MAJOR=$((MAJOR + 1))
               MINOR=0
@@ -79,47 +110,71 @@ jobs:
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "New version: $NEW_VERSION"
           
-          # Update version.json
-          jq --arg version "$NEW_VERSION" \
-             --arg updated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-             --arg pr_number "${{ github.event.pull_request.number }}" \
-             --arg pr_title "${{ github.event.pull_request.title }}" \
-             '.version = $version | .updated = $updated | .last_pr = {number: ($pr_number | tonumber), title: $pr_title}' \
-             version.json > tmp.json && mv tmp.json version.json
-          
-          # Set outputs
-          echo "::set-output name=old_version::$CURRENT_VERSION"
-          echo "::set-output name=new_version::$NEW_VERSION"
-
-      - name: Update CHANGELOG
-        run: |
-          # Create or update CHANGELOG.md
-          if [ ! -f CHANGELOG.md ]; then
-            echo "# Changelog" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
+          # Check if version actually changed
+          if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "version_changed=false" >> $GITHUB_OUTPUT
           fi
           
-          # Prepare changelog entry
+          echo "old_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update Version File
+        if: steps.bump.outputs.version_changed == 'true'
+        run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
-          TODAY=$(date +"%Y-%m-%d")
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
           
-          # Create temporary file with new entry
+          # Update version.json with new version and timestamp
+          jq --arg version "$NEW_VERSION" \
+             --arg updated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+             --arg commit_sha "${{ github.sha }}" \
+             --arg commit_message "${{ github.event.head_commit.message }}" \
+             '.version = $version | .updated = $updated | .last_commit = {sha: $commit_sha, message: $commit_message}' \
+             version.json > tmp.json && mv tmp.json version.json
+
+      - name: Update CHANGELOG
+        if: steps.bump.outputs.version_changed == 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          OLD_VERSION="${{ steps.bump.outputs.old_version }}"
+          TODAY=$(date +"%Y-%m-%d")
+          COMMIT_MESSAGE="${{ github.event.head_commit.message }}"
+          COMMIT_AUTHOR="${{ github.event.head_commit.author.name }}"
+          COMMIT_SHA="${{ github.sha }}"
+          
+          # Create CHANGELOG.md if it doesn't exist
+          if [ ! -f CHANGELOG.md ]; then
+            cat > CHANGELOG.md << 'EOF'
+          # Changelog
+          
+          All notable changes to the GitHub Copilot shared configuration will be documented in this file.
+          
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+          
+          EOF
+          fi
+          
+          # Create changelog entry
           cat > changelog_entry.md << EOF
           
           ## [$NEW_VERSION] - $TODAY
           
           ### Changed
-          - $PR_TITLE (#$PR_NUMBER by @$PR_AUTHOR)
+          - $COMMIT_MESSAGE
+          
+          **Details:**
+          - Updated from v$OLD_VERSION to v$NEW_VERSION
+          - Commit: [\`${COMMIT_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/$COMMIT_SHA)
+          - Author: $COMMIT_AUTHOR
           
           EOF
           
-          # Insert new entry after the first line (# Changelog)
-          head -n 1 CHANGELOG.md > new_changelog.md
+          # Insert new entry after the header
+          head -n 6 CHANGELOG.md > new_changelog.md
           cat changelog_entry.md >> new_changelog.md
-          tail -n +2 CHANGELOG.md >> new_changelog.md
+          tail -n +7 CHANGELOG.md >> new_changelog.md
           mv new_changelog.md CHANGELOG.md
           rm changelog_entry.md
 
@@ -138,40 +193,34 @@ jobs:
           commit_user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
 
-
       - name: Create Git Tag
+        if: steps.bump.outputs.version_changed == 'true'
         run: |
-          # Ensure git is configured
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Check if the tag already exists
-          if git rev-parse "v${{ steps.bump.outputs.new_version }}" >/dev/null 2>&1; then
-            echo "Tag v${{ steps.bump.outputs.new_version }} already exists. Skipping tag creation."
-          else
-           # Create a new tag for the version bump
-           git tag "v${{ steps.bump.outputs.new_version }}" -m "Release v${{ steps.bump.outputs.new_version }}
-
-          Changes from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          
+          # Create annotated tag
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION
+          
+          Changes:
+          - ${{ github.event.head_commit.message }}
           
           Full changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md"
-
-      - name: Push Changes and Tags
-        run: |
-          git push origin main
-          git push origin "v${{ steps.bump.outputs.new_version }}"
+          
+          # Push tag
+          git push origin "v$NEW_VERSION"
 
   create-release:
     needs: increment-version
     runs-on: ubuntu-latest
-    if: success()
+    if: needs.increment-version.outputs.version_changed == 'true'
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          ref: main  # Get the updated main branch
+          ref: main  # Get updated main branch
 
       - name: Create GitHub Release
+        id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -179,26 +228,126 @@ jobs:
           tag_name: "v${{ needs.increment-version.outputs.new_version }}"
           release_name: "Release v${{ needs.increment-version.outputs.new_version }}"
           body: |
-            ## 🚀 Release v${{ needs.increment-version.outputs.new_version }}
+            ## 🚀 GitHub Copilot Configuration v${{ needs.increment-version.outputs.new_version }}
             
             ### 📋 Changes
-            - ${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})
+            - ${{ github.event.head_commit.message }}
             
-            ### 📊 Version Bump
-            - **Previous**: v${{ needs.increment-version.outputs.old_version }}
-            - **Current**: v${{ needs.increment-version.outputs.new_version }}
-            - **Type**: ${{ steps.bump-type.outputs.bump_type }}
+            ### 📊 Version Information
+            - **Previous Version**: v${{ needs.increment-version.outputs.old_version }}
+            - **Current Version**: v${{ needs.increment-version.outputs.new_version }}
+            - **Release Date**: ${{ steps.date.outputs.date }}
             
-            ### 🎯 Affected Services
-            This release will automatically update GitHub Copilot configuration in:
-            - user-service
-            - order-service  
-            - payment-service
+            ### 📁 What's Updated
+            - Shared GitHub Copilot instructions
+            - Prompt templates for Spring Boot development
+            - Git commit guidelines
+            - Service-specific configurations
+            
+            ### 🔄 How to Update Your Microservices
+            Since this workflow doesn't automatically notify microservices, you'll need to manually trigger updates:
+            
+            1. **Automatic (scheduled)**: Microservices will pick up this version in their next scheduled sync (every 4 hours)
+            2. **Manual**: Go to each microservice repository and trigger the "Sync Copilot Configuration" workflow manually
+            3. **API trigger**: Use the GitHub API to trigger repository dispatch events
             
             ### 📖 Full Changelog
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for complete details.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for complete version history.
+            
+            ### 🎯 Affected Components
+            - Global copilot instructions
+            - Spring Boot prompt templates
+            - Git commit message guidelines
+            - Service-specific customizations
             
             ---
-            *This release was automatically created after merging PR #${{ github.event.pull_request.number }}*
+            *This release was automatically created by the auto-increment-version workflow*
           draft: false
           prerelease: false
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+  create-notification-issue:
+    needs: increment-version
+    runs-on: ubuntu-latest
+    if: needs.increment-version.outputs.version_changed == 'true'
+    steps:
+      - name: Create Notification Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const newVersion = '${{ needs.increment-version.outputs.new_version }}';
+            const oldVersion = '${{ needs.increment-version.outputs.old_version }}';
+            
+            const issueBody = `## 🔄 Microservices Update Required
+            
+            A new version of GitHub Copilot configuration has been released and needs to be synced to microservices.
+            
+            ### 📊 Version Details
+            - **New Version**: v${newVersion}
+            - **Previous Version**: v${oldVersion}
+            - **Release**: https://github.com/${{ github.repository }}/releases/tag/v${newVersion}
+            
+            ### 🎯 Microservices to Update
+            - [ ] user-service
+            - [ ] order-service  
+            - [ ] payment-service
+            - [ ] Add more services here...
+            
+            ### 🔧 Update Methods
+            
+            **Option 1: Wait for automatic sync** (every 4 hours)
+            - Microservices will automatically detect and sync the new version
+            
+            **Option 2: Manual trigger**
+            - Go to each microservice repository
+            - Navigate to Actions → "Sync Copilot Configuration"
+            - Click "Run workflow"
+            
+            **Option 3: API trigger**
+            \`\`\`bash
+            # Example for user-service
+            curl -X POST \\
+              -H "Authorization: token YOUR_TOKEN" \\
+              -H "Accept: application/vnd.github.v3+json" \\
+              https://api.github.com/repos/your-org/user-service/dispatches \\
+              -d '{"event_type":"copilot-config-updated"}'
+            \`\`\`
+            
+            ### ✅ Verification
+            After sync, verify that each microservice has:
+            - Updated \`.github/copilot-instructions.md\`
+            - Updated \`.github/prompts/*.prompt.md\`
+            - Version file shows v${newVersion}
+            
+            ---
+            *This issue was automatically created by the version increment workflow*`;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🤖 Update microservices to Copilot config v${newVersion}`,
+              body: issueBody,
+              labels: ['copilot-sync', 'automated', 'microservices-update']
+            });
+
+  output-summary:
+    needs: increment-version
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Output Summary
+        run: |
+          if [ "${{ needs.increment-version.outputs.version_changed }}" = "true" ]; then
+            echo "✅ Version successfully incremented to v${{ needs.increment-version.outputs.new_version }}"
+            echo "📋 Previous version: v${{ needs.increment-version.outputs.old_version }}"
+            echo "🏷️ Git tag created: v${{ needs.increment-version.outputs.new_version }}"
+            echo "📄 GitHub release created"
+            echo "📝 Issue created for microservice updates"
+            echo ""
+            echo "🔄 Microservices will sync automatically or can be triggered manually"
+          else
+            echo "ℹ️ No version change needed - skipping release creation"
+          fi

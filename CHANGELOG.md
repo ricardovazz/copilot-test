@@ -5,6 +5,17 @@ All notable changes to the GitHub Copilot shared configuration will be documente
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2025-07-06
+
+### Changed
+- add issues permission
+
+**Details:**
+- Updated from v1.0.2 to v1.0.3
+- Commit: [`ea8fbee`](https://github.com/ricardovazz/copilot-test/commit/ea8fbeeb0e18a23928bf17f9389deec1cf9bce53)
+- Author: Ricardo Vaz
+
+
 ## [1.0.2] - 2025-07-06
 
 ### Changed

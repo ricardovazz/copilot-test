@@ -20,6 +20,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  issues: write
 
 jobs:
   increment-version:
@@ -242,7 +243,6 @@ jobs:
             - Shared GitHub Copilot instructions
             - Prompt templates for Spring Boot development
             - Git commit guidelines
-            - Service-specific configurations
             
             ### 🔄 How to Update Your Microservices
             Since this workflow doesn't automatically notify microservices, you'll need to manually trigger updates:
@@ -258,7 +258,6 @@ jobs:
             - Global copilot instructions
             - Spring Boot prompt templates
             - Git commit message guidelines
-            - Service-specific customizations
             
             ---
             *This release was automatically created by the auto-increment-version workflow*

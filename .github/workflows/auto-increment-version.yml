@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.github/copilot-instructions.md'
+      - '.github/git-commit-instructions.md'
+      - '.github/prompts/**'
+
   workflow_dispatch:
     inputs:
       bump_type:
